@@ -1,6 +1,7 @@
 
 import cProfile
 import sys
+import json
 import numpy as np
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QGraphicsView, QMessageBox,\
         QGraphicsScene,QMenuBar,QAction,QToolBar,QMainWindow,QSizePolicy,QStatusBar,QLabel,QGraphicsPixmapItem
@@ -11,6 +12,8 @@ from aboutform import AboutDialog
 from settingform import SettingsDialog
 from componentsForm import ComponentsDialog
 from myviewscene import GameScene,GameView
+from numba import jit
+
 # todo 算法加速
 # todo （完成）增加参数设置界面：界面长度，宽度，细胞大小，细胞颜色，细胞贴图。鼠标调整。时钟时间。
 # todo （完成）界面调整：菜单，快捷按钮，底部菜单栏。。。
@@ -22,6 +25,7 @@ from myviewscene import GameScene,GameView
 # todo 可逆的元胞自动机，研究自动机的可逆性。。。。每一次演算进行地图保存是可行的，但是意义是什么呢？
 # todo 三维的元胞自动机。引入新的grid，细胞算法和显示架构
 
+import threading
 
 # 创建一个新类，继承自QGraphicsPixmapItem
 class PixmapItem(QGraphicsPixmapItem):
@@ -50,6 +54,9 @@ class GameOfLife(QMainWindow):
         self.dragging = False
         self.drag_start_pos = None
 
+        self.settings=self.load_settings()
+        # self.update_thread = GameThread(self)
+        # self.update_thread.start()
 
         self.init_ui()
     def init_ui(self):
@@ -82,6 +89,10 @@ class GameOfLife(QMainWindow):
         start_btn.setIcon(QIcon('life.png'))
         start_btn.clicked.connect(self.start_simulation)
         tool_bar.addWidget(start_btn)
+
+        step_btn = QPushButton('单步执行', self)
+        step_btn.clicked.connect(self.update_grid)
+        tool_bar.addWidget(step_btn)
 
         stop_btn = QPushButton('停止', self)
         stop_btn.clicked.connect(self.stop_simulation)
@@ -135,12 +146,15 @@ class GameOfLife(QMainWindow):
         # 设置状态栏
         status_bar = QStatusBar(self)
         self.setStatusBar(status_bar)
-        self.status_label = QLabel("状态栏信息", self)
+        self.status_label = QLabel("地图："+str(self.cols)+'✖️'+str(self.rows), self)
         status_bar.addWidget(self.status_label)
 
-        self.status_label2= QLabel("鼠标信息", self)
+        self.status_label2= QLabel("鼠标位置", self)
         status_bar.addWidget(self.status_label2)
 
+        self.status_label3= QLabel("当前构型：一个活的元胞", self)
+        status_bar.addWidget(self.status_label3)
+        
         # 创建中央部件
         central_widget = QWidget(self)
         central_layout = QVBoxLayout(central_widget)
@@ -153,6 +167,9 @@ class GameOfLife(QMainWindow):
         self.setWindowTitle('模拟器')
         # self.setMouseTracking(True)
         # self.view.setMouseTracking(True)
+    def closeEvent(self, event):
+        self.save_settings(self.settings)
+        event.accept()
 
     # def init_ui(self):
     #     layout = QVBoxLayout()
@@ -211,7 +228,11 @@ class GameOfLife(QMainWindow):
         new_grid[new_rows[:, np.newaxis], new_cols] = grid
 
         return new_grid
+    
     def add_grid_with_dir(self, grid1, start_row, start_col, dir):
+        '''
+        增加方向调整功能的add_gird
+        '''
         try:
             grid1=np.rot90(grid1, k=dir-1)
         except:
@@ -277,6 +298,54 @@ class GameOfLife(QMainWindow):
         # 替换grid的对应区域
         self.grid[start_row:end_row, start_col:end_col] = grid1
 
+    # def update_grid1(self):
+    #     new_grid = self.grid.copy()
+    #     rows, cols = self.grid.shape
+    #     neighbors = np.zeros((rows, cols))
+    #     n = list(range(8))
+    #     def up():
+    #         n[0]= np.roll(self.grid, 1, axis=0)  # 上方邻居
+    #     def down():
+    #         n[1]= np.roll(self.grid, -1, axis=0)  # 下方邻居
+    #     def right():
+    #         n[2]= np.roll(self.grid, 1, axis=1)  # 右方邻居
+    #     def left():
+    #         n[3]= np.roll(self.grid, -1, axis=1)  # 左方邻居
+    #     def up_right():
+    #         n[4]= np.roll(np.roll(self.grid, 1, axis=0), 1, axis=1)  # 右上方邻居
+    #     def up_left():
+    #         n[5]= np.roll(np.roll(self.grid, 1, axis=0), -1, axis=1)  # 左上方邻居
+    #     def down_right():
+    #         n[6]= np.roll(np.roll(self.grid, -1, axis=0), 1, axis=1)  # 右下方邻居
+    #     def down_left():
+    #         n[7]= np.roll(np.roll(self.grid, -1, axis=0), -1, axis=1)  # 左下方邻居
+    #     threads = []
+    #     threads.append(threading.Thread(target=up))
+    #     threads.append(threading.Thread(target=down))
+    #     threads.append(threading.Thread(target=right))
+    #     threads.append(threading.Thread(target=left))
+    #     threads.append(threading.Thread(target=up_right))
+    #     threads.append(threading.Thread(target=up_left))
+    #     threads.append(threading.Thread(target=down_right))
+    #     threads.append(threading.Thread(target=down_left))
+    #     for t in threads:
+    #         t.start()
+
+    #     for t in threads:
+    #         t.join()
+
+    #     for i in n:
+    #         neighbors +=i
+    #     total = neighbors / 1        
+    #     new_grid[(self.grid == 1) & ((total < 2) | (total > 3))] = 0
+    #     new_grid[(self.grid == 0) & (total == 3)] = 1        
+    #     self.grid = new_grid
+    #     percentage=(self.grid.sum()/(self.rows*self.cols))*100
+    #     self.draw_grid()
+    #     self.status_label.setText("存活: {:.2f}%".format(percentage))
+
+
+    # @jit(nopython=True)
     def update_grid(self):
         new_grid = self.grid.copy()
         rows, cols = self.grid.shape
@@ -296,7 +365,7 @@ class GameOfLife(QMainWindow):
         self.grid = new_grid
         percentage=(self.grid.sum()/(self.rows*self.cols))*100
         self.draw_grid()
-        self.status_label.setText("存活: {:.2f}%".format(percentage))
+        self.status_label.setText("地图："+str(self.cols)+'✖️'+str(self.rows)+",存活: {:.2f}%".format(percentage))
 
     # def update_grid(self):
     #     new_grid = self.grid.copy()
@@ -343,7 +412,7 @@ class GameOfLife(QMainWindow):
 
         # for cell in cells:
         #     self.scene.addItem(cell)
-
+    # @jit(nopython=True)
     def draw_grid(self):
         if  (self.isUndo==False)  :
             if (len(self.history) == 0) or not np.array_equal(self.grid, self.history[-1]) :
@@ -355,6 +424,9 @@ class GameOfLife(QMainWindow):
         self.isUndo=False
         # 改变undo_btn按钮展示名
         self.undo_btn.setText("回退"+"("+str(len(self.history))+")")
+        
+        # self.scene=GameScene(self)        
+        # self.view.setScene(self.scene)
         self.scene.clear()
         self.cells = []
         
@@ -362,14 +434,14 @@ class GameOfLife(QMainWindow):
             for j in range(self.cols):
                 if self.grid[i, j] == 1:
                     brush = self.black_brush
-                    # rect = QGraphicsRectItem(j * self.cell_size, i * self.cell_size, self.cell_size, self.cell_size)
-                    # rect.setBrush(brush)
-                    # cells.append(rect)
+                    rect = QGraphicsRectItem(j * self.cell_size, i * self.cell_size, self.cell_size, self.cell_size)
+                    rect.setBrush(brush)
+                    self.cells.append(rect)
                 else:
                     brush = self.white_brush
-                rect = QGraphicsRectItem(j * self.cell_size, i * self.cell_size, self.cell_size, self.cell_size)
-                rect.setBrush(brush)
-                self.cells.append(rect)
+                # rect = QGraphicsRectItem(j * self.cell_size, i * self.cell_size, self.cell_size, self.cell_size)
+                # rect.setBrush(brush)
+                # self.cells.append(rect)
 
         for cell in self.cells:
             self.scene.addItem(cell)
@@ -409,6 +481,7 @@ class GameOfLife(QMainWindow):
         result = ComponentsD.exec_()
         if result == 0:
             self.clicked_matrix = np.array(ComponentsD.clicked_matrix)
+            self.status_label3.setText('当前构型：'+ComponentsD.component)
 
         # self.grid= self.shift_grid(self.grid,-1,-1)
         # self.draw_grid()
@@ -426,17 +499,39 @@ class GameOfLife(QMainWindow):
     def show_about(self):
         about_dialog = AboutDialog()
         about_dialog.exec()
-
+    def one_step(self):
+        self.update()
+        self.draw_grid()
     def start_simulation(self):
         self.timer.start(self.clock)
-        # self.update_grid()
-        # self.draw_grid() 
     def stop_simulation(self):
         self.timer.stop()
     def refresh_simulation(self):
         self.grid = np.random.choice([0, 1], size=(self.rows,self. cols))
         self.draw_grid()
+    def load_settings(self):
+        with open('settings.json') as f:
+            settings = json.load(f)
+            self.cols=int(settings["cols"])
+            self.rows=int(settings["rows"])
+            self.clock=int(settings["clock"])
+            self.black_brush= QBrush(QColor((settings["color"])))     
+            self.cell_size=int(settings["cell_size"])
+            # self.grid = np.random.choice([0, 1], size=(self.rows, self.cols))
+            # self.grid = np.fromstring(settings["grid"], dtype=int).reshape(self.rows, self.cols)
+            data = np.load('grid.npz')
+            self.grid = data['grid'].astype(np.int)             
+            return settings
 
+    def save_settings(self,settings):
+        with open('settings.json', 'w') as f:
+            settings["cols"]=self.cols
+            settings["rows"]=self.rows
+            settings["clock"]=self.clock
+            settings["color"]=self.black_brush.color().name()
+            settings["cell_size"]=self.cell_size
+            np.savez_compressed('grid.npz', grid=self.grid)
+            json.dump(settings, f)
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     game_of_life = GameOfLife()
@@ -445,8 +540,9 @@ if __name__ == '__main__':
     profiler.enable()
 
     game_of_life.show()
-    for i in range(1):
-        game_of_life.update_grid()
+    game_of_life.draw_grid()
+    # for i in range(10):
+    #     game_of_life.update_grid()
 
     profiler.disable()
     profiler.print_stats()

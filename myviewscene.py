@@ -1,6 +1,6 @@
 from PyQt5.QtWidgets import QGraphicsView,QGraphicsScene
 from PyQt5.QtWidgets import QApplication
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt,QRectF
 from PyQt5.QtGui import QWheelEvent
 class GameView(QGraphicsView):
     def __init__(self,scene):
@@ -8,6 +8,7 @@ class GameView(QGraphicsView):
         self.setMouseTracking(True)
         self.scene = scene
         self.setScene(scene)
+        self.setAlignment(Qt.AlignTop | Qt.AlignLeft)
     def mousePressEvent(self, event):
         self.scene.mousePressEvent(event)
 
@@ -30,6 +31,7 @@ class GameScene(QGraphicsScene):
         self.dragging=False
         self.draged=False
         self.direction=1#表征鼠标控制的gird的朝向方向。
+        self.dirstring=['👆','👇', '👈', '👉']
     def mousePressEvent(self, event):
         print(event.button())
         # self.direction=1
@@ -44,6 +46,7 @@ class GameScene(QGraphicsScene):
             self.direction += 1
             if self.direction > 4:
                 self.direction = 1  
+            
             print('dir'+str(self.direction))          
         # elif event.button() == Qt.RightButton:
         #     # 左键已经按下的情况下,再点击右键调整方向
@@ -51,6 +54,22 @@ class GameScene(QGraphicsScene):
         #         self.direction += 1
         #         if self.direction > 4:
         #             self.direction = 1
+    # def drawBackground(self, painter, rect):
+    #   # 绘制地图边框
+    #   painter.setBrush(Qt.black) 
+    #   rect = QRectF(0, 0, 
+    #         self.GameOfLife.cols * self.GameOfLife.cell_size,
+    #         self.GameOfLife.rows * self.GameOfLife.cell_size)
+    #   painter.drawRect(rect)
+
+      # for i in range(self.GameOfLife.rows):
+      #   for j in range(self.GameOfLife.cols):
+      #     brush = QBrush(Qt.white)
+      #     painter.fillRect(QRectF(j*self.GameOfLife.cell_size, 
+      #                 i*self.GameOfLife.cell_size,
+      #                 self.GameOfLife.cell_size,
+      #                 self.GameOfLife.cell_size),brush)
+
     def mouseMoveEvent(self, event):
         # print(event.pos())
         global_pos = event.globalPos()
@@ -79,6 +98,7 @@ class GameScene(QGraphicsScene):
                 row = int((self.drag_start_pos.y() ) // self.GameOfLife.cell_size)
                 col = int((self.drag_start_pos.x() ) // self.GameOfLife.cell_size)    
                 # self.GameOfLife.add_grid(self.GameOfLife.clicked_matrix, row, col)
+
                 self.GameOfLife.add_grid_with_dir(self.GameOfLife.clicked_matrix, row, col,self.direction)
                 self.GameOfLife.draw_grid()
                 self.direction=1
