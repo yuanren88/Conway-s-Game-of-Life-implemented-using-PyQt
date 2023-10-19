@@ -3,10 +3,10 @@ import cProfile
 import sys
 import json
 import numpy as np
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QGraphicsView, QMessageBox,\
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QGraphicsView, QMessageBox,QStyle,\
         QGraphicsScene,QMenuBar,QAction,QToolBar,QMainWindow,QSizePolicy,QStatusBar,QLabel,QGraphicsPixmapItem
 from PyQt5.QtCore import QTimer, QRectF,Qt
-from PyQt5.QtGui import QBrush, QColor,QPixmap,QIcon,QWheelEvent
+from PyQt5.QtGui import QBrush, QColor,QPixmap,QIcon,QWheelEvent,QPainter
 from PyQt5.QtWidgets import QGraphicsRectItem
 from aboutform import AboutDialog
 from settingform import SettingsDialog
@@ -17,15 +17,36 @@ from numba import jit
 # todo 算法加速
 # todo （完成）增加参数设置界面：界面长度，宽度，细胞大小，细胞颜色，细胞贴图。鼠标调整。时钟时间。
 # todo （完成）界面调整：菜单，快捷按钮，底部菜单栏。。。
-# todo 功能：鼠标能够调整地图整体（未来3D地球化）。。。增加构形库，可以直接增加构型。
+# todo （完成）功能：鼠标能够调整地图整体（未来3D地球化）。。。增加构形库，可以直接增加构型。
 # todo 可变的地图：目前地图为长方形上下左右接通形态，未来，可以作出圆形，星型等异性地图，可以前后左右不接通，可以地图中增加高墙等。/
     # 每一个地图都是一个独立的类，包含各自的边界检测函数，或者是细胞变换函数，在世界构造初期通过类工厂进行载入。
 # todo 增加地图编辑功能：增加地图编辑界面，可以设置复杂地图，增加，删除，移动地图中的高墙。
 # todo 参见https://zhuanlan.zhihu.com/p/621070746
-# todo 可逆的元胞自动机，研究自动机的可逆性。。。。每一次演算进行地图保存是可行的，但是意义是什么呢？
+# todo （完成）可逆的元胞自动机，研究自动机的可逆性。。。。每一次演算进行地图保存是可行的，但是意义是什么呢（寻找有趣构型的每一个形态）？
 # todo 三维的元胞自动机。引入新的grid，细胞算法和显示架构
-
+# todo  游戏性：控制滑翔机穿越障碍。
+# todo 研究寄存器机，尝试输出汉字。https://blog.csdn.net/Jailman/article/details/116230761
+# todo 扩展生命规则：原生的康威生命游戏主要由两条规则构建：一，死亡细胞周围有3个存活细胞时就诞生为新细胞；二，存活细胞周围有2或3个存活细胞时就保持存活，否则死亡。这两条规则可以简记为B3/S23（其中，B代表出生，S代表存活）。通过修改B或S 后面的数字，就可以创建出不同的生命游戏。例如，把B1、B2、S3这三个开关打开，我们就创建了规则B12/S3，这意味着：死亡细胞周围有1或2个存活细胞时才诞生为新细胞，而存活细胞周围有3个存活细胞时才保持存活。
 import threading
+@jit(nopython=True)
+def update_grid(grid,rows,cols):
+    new_grid = grid.copy()
+    for i in range(rows):
+        for j in range(cols):
+            total = int((grid[i, (j-1)%cols] + grid[i, (j+1)%cols] +
+                        grid[(i-1)%rows, j] + grid[(i+1)%rows, j] +
+                        grid[(i-1)%rows, (j-1)%cols] + grid[(i-1)%rows, (j+1)%cols] +
+                        grid[(i+1)%rows, (j-1)%cols] + grid[(i+1)%rows, (j+1)%cols]) / 1)
+            if grid[i, j] == 1:
+                if total < 2 or total > 3:
+                    new_grid[i, j] = 0
+            else:
+                if total == 3:
+                    new_grid[i, j] = 1
+    grid = new_grid
+    return grid
+
+
 
 # 创建一个新类，继承自QGraphicsPixmapItem
 class PixmapItem(QGraphicsPixmapItem):
@@ -44,15 +65,16 @@ class GameOfLife(QMainWindow):
         self.grid = np.random.choice([0, 1], size=(rows, cols))
         self.clicked_matrix= np.array([[1]])
         # 加载图片
-        self.black_pixmap = QPixmap("life.png")
-        self.white_pixmap = QPixmap("life.png")
+        # self.black_pixmap = QPixmap("life.png")
+        # self.white_pixmap = QPixmap("life.png")
         self.history = []  # 历史数组，用于存储每次绘制的grid
-        self.Maxhistory = 100  # 最大历史记录数
+        self.Maxhistory = 1000  # 最大历史记录数
         self.isUndo=False
         self.black_brush = QBrush(QColor(0, 0, 0))
         self.white_brush = QBrush(QColor(255, 255, 255))
         self.dragging = False
         self.drag_start_pos = None
+        self.run_count = 0
 
         self.settings=self.load_settings()
         # self.update_thread = GameThread(self)
@@ -61,7 +83,9 @@ class GameOfLife(QMainWindow):
         self.init_ui()
     def init_ui(self):
         self.timer = QTimer(self)
-        self.timer.timeout.connect(self.update_grid)
+        # self.timer.timeout.connect(self.update_grid)
+        # self.timer.timeout.connect(lambda: update_grid(self.grid, self.rows, self.cols))
+        self.timer.timeout.connect(self.run_update_grid)
         icon = QIcon('life.png')       
         # 创建菜单栏
         menu_bar = QMenuBar(self)
@@ -86,47 +110,57 @@ class GameOfLife(QMainWindow):
 
         # 添加按钮到工具栏
         start_btn = QPushButton('开始', self)
-        start_btn.setIcon(QIcon('life.png'))
+        # start_btn.setIcon(QIcon('life.png'))
+        start_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaSeekForward))
         start_btn.clicked.connect(self.start_simulation)
         tool_bar.addWidget(start_btn)
 
         step_btn = QPushButton('单步执行', self)
-        step_btn.clicked.connect(self.update_grid)
+        step_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaPlay))
+        step_btn.clicked.connect(self.run_update_grid)
         tool_bar.addWidget(step_btn)
 
         stop_btn = QPushButton('停止', self)
+        stop_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaStop))
         stop_btn.clicked.connect(self.stop_simulation)
         tool_bar.addWidget(stop_btn)
 
         self.undo_btn = QPushButton('回退', self)
+        self.undo_btn.setIcon(self.style().standardIcon(QStyle.SP_MediaSeekBackward))
         self.undo_btn.clicked.connect(self.undo)
         tool_bar.addWidget(self.undo_btn)
 
         refresh_btn = QPushButton('刷新', self)
+        refresh_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogOkButton))
         refresh_btn.clicked.connect(self.refresh_simulation)
         tool_bar.addWidget(refresh_btn)
         # 添加清空按钮
         clear_btn = QPushButton('清空', self)
+        clear_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogResetButton))
         clear_btn.clicked.connect(self.clear_grid)
         tool_bar.addWidget(clear_btn)
 
         # 添加设置按钮
         settings_btn = QPushButton('设置', self)
+        settings_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogDetailedView))
         settings_btn.clicked.connect(self.show_settings)
         tool_bar.addWidget(settings_btn)
 
         # 添加构型按钮
         pattern_btn = QPushButton('构型', self)
+        pattern_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogYesButton))
         pattern_btn.clicked.connect(self.show_patterns)
         tool_bar.addWidget(pattern_btn)
 
         # 添加关于按钮
         about_btn = QPushButton('关于', self)
+        about_btn.setIcon(self.style().standardIcon(QStyle.SP_FileDialogInfoView))
         about_btn.clicked.connect(self.show_about)
         tool_bar.addWidget(about_btn)
 
         # 添加退出按钮
         exit_btn = QPushButton('退出', self)
+        exit_btn.setIcon(self.style().standardIcon(QStyle.SP_DialogCancelButton))
         exit_btn.clicked.connect(self.close)
         tool_bar.addWidget(exit_btn)
 
@@ -155,6 +189,9 @@ class GameOfLife(QMainWindow):
         self.status_label3= QLabel("当前构型：一个活的元胞", self)
         status_bar.addWidget(self.status_label3)
         
+        self.status_label4= QLabel("", self)
+        status_bar.addWidget(self.status_label4)
+       
         # 创建中央部件
         central_widget = QWidget(self)
         central_layout = QVBoxLayout(central_widget)
@@ -167,6 +204,65 @@ class GameOfLife(QMainWindow):
         self.setWindowTitle('模拟器')
         # self.setMouseTracking(True)
         # self.view.setMouseTracking(True)
+    def Find_pattern(self):
+        # 设定地图初始状态
+        self.cols=200
+        self.rows=200
+        # 定义一个函数，用于生成所有可能的网格
+
+        def gen_grids(r,c):
+            grids=[]
+            grid = np.zeros((r,c), dtype=int)
+            total = 2**(r*c)
+            for i in range(total):
+                x = i
+                grid[:,:] = 0
+                for j in range(c*r):
+                    grid.ravel()[j] = x%2
+                    x //= 2
+                # print(grid)
+                if grid.sum() == 12:
+                    grids.append(grid.copy())
+            return grids
+
+        # 调用函数，生成所有可能的3x3网格
+        grids = gen_grids(5,5)
+        count=0
+        # 打印所有可能的网格
+        for small_grid in grids:
+            # print(grid)
+            self.grid = np.zeros((self.rows, self.cols)) 
+            self.add_grid(small_grid,50,50)
+            # print(small_grid,'\n')
+            runcount=0
+            oldgrids=[]
+            count+=1
+            while runcount<12100:
+                # 记录历史的grid
+                oldgrids.append(self.grid.copy())
+                if runcount>1:
+                    oldgrids.pop(0)
+                # 遍历产生不同的grid构型组合
+                self.grid= update_grid(self.grid, self.rows, self.cols)
+
+                sum=self.grid.sum()
+                # or np.array_equal(oldgrids[0],self.grid)
+                if (sum==0) or np.array_equal(oldgrids[0],self.grid):
+                    # print('\nend in '+str(runcount)+' times')
+                    break
+                runcount+=1      
+            if runcount>12000:      
+                print('runcount',runcount)
+                print(count,'/',len(grids),'\n')
+                print(small_grid,'\n')
+
+    def run_update_grid(self):
+        self.grid= update_grid(self.grid, self.rows, self.cols)
+        percentage=(self.grid.sum()/(self.rows*self.cols))*100
+        self.run_count+=1
+        self.status_label.setText("地图："+str(self.cols)+'✖️'+str(self.rows)+",轮次："+str(self.run_count)+",存活: {:.2f}%".format(percentage))
+        self.draw_grid()
+
     def closeEvent(self, event):
         self.save_settings(self.settings)
         event.accept()
@@ -412,8 +508,47 @@ class GameOfLife(QMainWindow):
 
         # for cell in cells:
         #     self.scene.addItem(cell)
-    # @jit(nopython=True)
     def draw_grid(self):
+        if  (self.isUndo==False)  :
+            if (len(self.history) == 0) or not np.array_equal(self.grid, self.history[-1]) :
+                self.history.append(self.grid.copy())
+                self.isundoed=False
+            # 如果历史数组的长度超过10，移除最早的元素
+            if len(self.history) > self.Maxhistory:
+                self.history = self.history[-self.Maxhistory:]
+        self.isUndo=False
+        # 改变undo_btn按钮展示名
+        self.undo_btn.setText("回退"+"("+str(len(self.history))+")")
+        
+        # 创建双缓存的Pixmap
+        pixmap = QPixmap(self.cols * self.cell_size, self.rows * self.cell_size)
+        pixmap.fill(Qt.white)
+        painter = QPainter(pixmap)
+        
+        # 绘制网格
+        for i in range(self.rows):
+            for j in range(self.cols):
+                if self.grid[i, j] == 1:
+                    painter.fillRect(j * self.cell_size, i * self.cell_size, self.cell_size, self.cell_size, Qt.black)
+                # else:
+                #     painter.fillRect(j * self.cell_size, i * self.cell_size, self.cell_size, self.cell_size, Qt.white)
+
+        painter.end()
+
+        # 清除场景并添加绘制的Pixmap
+        self.scene.clear()
+        self.scene.draw_edge()
+        self.scene.addPixmap(pixmap)
+        if  self.cell_size>3:
+            self.scene.draw_lines()
+
+        # 更新视图
+        self.view.update()
+
+
+
+    # @jit(nopython=True)
+    def draw_grid3(self):
         if  (self.isUndo==False)  :
             if (len(self.history) == 0) or not np.array_equal(self.grid, self.history[-1]) :
                 self.history.append(self.grid.copy())
@@ -466,6 +601,10 @@ class GameOfLife(QMainWindow):
             # self.white_brush=QBrush(QColor(255, 255, 255))
             # 更新timer的clock
             self.timer.setInterval(self.clock)
+            # self.status_label = QLabel("地图："+str(self.cols)+'✖️'+str(self.rows), self)
+            percentage=(self.grid.sum()/(self.rows*self.cols))*100
+            self.status_label.setText("地图："+str(self.cols)+'✖️'+str(self.rows)+",轮次："+str(self.run_count)+",存活: {:.2f}%".format(percentage))
+
             self.draw_grid()
 
 
@@ -536,15 +675,24 @@ if __name__ == '__main__':
     app = QApplication(sys.argv)
     game_of_life = GameOfLife()
 
-    profiler = cProfile.Profile()
-    profiler.enable()
 
     game_of_life.show()
     game_of_life.draw_grid()
-    # for i in range(10):
-    #     game_of_life.update_grid()
+    grid=np.random.choice([0, 1], size=(1, 1))
+    update_grid(grid,1,1)
+    profiler = cProfile.Profile()
+    profiler.enable()
+    # Find_pattern(100,100)
+    # game_of_life.Find_pattern()
+    # for i in range(20):
+    #     game_of_life.run_update_grid()
+        # game_of_life.update_grid()
+    #     update_grid(game_of_life.grid, game_of_life.rows, game_of_life.cols)
 
     profiler.disable()
-    profiler.print_stats()
+    # profiler.print_stats()
 
     sys.exit(app.exec_())
+
+
+    

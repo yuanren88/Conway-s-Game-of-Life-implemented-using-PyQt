@@ -33,12 +33,33 @@ class ComponentsDialog(QDialog):
 
       button = QPushButton(component)
       button.setToolTip(description)
-      button.clicked.connect(lambda state, m=matrix: self.on_button_clicked(m))
+      button.clicked.connect(lambda state,c=component, m=matrix: self.on_button_clicked(c,m))
       self.buttons.append(button)
 
-  def on_button_clicked(self, matrix):
+  def on_button_clicked(self, component,matrix):
     self.clicked_matrix = matrix
+    self.component=component
     self.close()
+
+def add_components(cdata):
+  # 读取json文件
+  with open('CellComponents.json') as f:
+    data = json.load(f)
+
+  # 增加一项
+  new_item = {
+    "构件": cdata['构件'],
+    "描述": cdata['描述'], 
+    "矩阵": cdata['矩阵']
+  }
+
+  data.append(new_item)
+
+  # 写入json文件  UTF-8
+  with open('CellComponents.json', 'w', encoding='utf-8') as f:
+  # with open('CellComponents.json', 'w') as f:
+    json.dump(data, f, indent=2)
+
 
 if __name__ == '__main__':
   app = QApplication(sys.argv)
